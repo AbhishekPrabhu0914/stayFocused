@@ -1,35 +1,39 @@
 from flask import Flask, request, jsonify
+import cv2
+import mediapipe as mp
+import numpy as np
+import base64
 from flask_cors import CORS
-import time
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})  # Allow all origins
+CORS(app)  # Enable CORS for all routes
 
-tasks = []
+mp_face_detection = mp.solutions.face_detection
+mp_drawing = mp.solutions.drawing_utils
 
-@app.route("/start_timer", methods=["POST"])
-def start_timer():
-    task_name = request.json.get("task", "Unnamed Task")
-    category = request.json.get("category", "General")
-    start_time = time.time()
-    return jsonify({"message": "Timer started", "start_time": start_time})
+@app.route('/upload', methods=['POST'])
+def upload_image():
+    data = request.get_json()
+    image_data = data['image']
+    image_data = image_data.split(',')[1]  # Remove the data URL prefix
+    image_bytes = base64.b64decode(image_data)
+    np_arr = np.frombuffer(image_bytes, np.uint8)
+    image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
-@app.route("/stop_timer", methods=["POST"])
-def stop_timer():
-    end_time = time.time()
-    task = request.json
-    task["time"] = round(end_time - task["start_time"], 2)
-    tasks.append(task)
-    return jsonify({"message": "Task saved", "tasks": tasks})
+    # Process the image with MediaPipe
+    with mp_face_detection.FaceDetection(model_selection=1, min_detection_confidence=0.5) as face_detection:
+        results = face_detection.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
 
-@app.route("/stats")
-def stats():
-    category_totals = {}
-    for task in tasks:
-        category_totals[task["category"]] = category_totals.get(task["category"], 0) + task["time"]
-    response = jsonify(category_totals)
-    response.headers.add("Access-Control-Allow-Origin", "*")  
-    return jsonify(category_totals)
+        # Draw face landmarks
+        if results.detections:
+            for detection in results.detections:
+                mp_drawing.draw_detection(image, detection)
 
-if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    # Encode the processed image to base64
+    _, buffer = cv2.imencode('.png', image)
+    processed_image_base64 = base64.b64encode(buffer).decode('utf-8')
+    
+    return jsonify({'processed_image': processed_image_base64})
+
+if __name__ == '__main__':
+    app.run(debug=True)
